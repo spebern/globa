@@ -11,13 +11,13 @@ package main
 import "github.com/spebern/globa"
 
 func main() {
-	us := []string{"www.google.de", "www.bing.de"}
+	URLs := []string{"www.google.de", "www.bing.de"}
 	maxConcurrentRequests := 3
 
 	lb := globa.NewLoadBalancer(URLs, maxConcurrentRequests)
 
 	u, err := lb.GetLeastBusyURL()
-	if err != nil {
+	if err == nil {
 		lb.IncLoad(u)
 
 		// do your request here
@@ -27,16 +27,17 @@ func main() {
 
 	u, err = lb.GetLeastBusyURL()
 
-	if err != nil {
+	if err == nil {
 		lb.IncLoad(u)
 
 		// do your request here
 		// ups failed!
 
-		lb.Remove(u)
-
 		// done also has to be called after failing!
 		lb.Done(u)
+
+		// remove this url since it seems broken
+		lb.Remove(u)
 	}
 
 	// after some time recover to all initial urls
