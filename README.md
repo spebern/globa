@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/spebern/globa.svg?branch=master)](https://travis-ci.org/spebern/globa)
+
 # Go load balancer
 
 This package provides a simple load balancer. The balancing is based on the total load on an URL.
