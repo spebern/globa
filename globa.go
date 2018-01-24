@@ -16,6 +16,10 @@ var ErrTimeout = errors.New("timeout")
 // Old removed hosts can be restored with the "Recover" method.
 var ErrNoRemainingHosts = errors.New("no remaining hosts")
 
+// ErrNotExistingHost will be returned if someone tries to increase load on not
+// existing host
+var ErrNotExistingHost = errors.New("host doesn't exist anymore")
+
 type host struct {
 	*sync.Mutex
 	avgResponseTime float64
@@ -142,7 +146,7 @@ func (lb *loadBalancer) IncLoad(URL string) (time.Time, error) {
 
 	h, ok := lb.hosts[URL]
 	if !ok {
-		panic("increased load of non existing host")
+		return time.Now(), ErrNotExistingHost
 	}
 
 	for {
@@ -168,7 +172,7 @@ func (lb *loadBalancer) Done(URL string, startTime time.Time) {
 
 	h, ok := lb.hosts[URL]
 	if !ok {
-		panic("called done for of non existing host")
+		return
 	}
 
 	h.Lock()

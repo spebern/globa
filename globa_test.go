@@ -114,23 +114,10 @@ func TestIncLoadAndDone(t *testing.T) {
 		t.Fatal("host should have a load of 0")
 	}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("increasing load of non existing host should panic")
-		}
-	}()
-
-	lb.IncLoad("www.not-existing.de")
-}
-
-func TestDonePanic(t *testing.T) {
-	lb := NewLoadBalancer([]string{}, 2, time.Second, 0.2).(*loadBalancer)
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("calling done on non existing host should panic")
-		}
-	}()
+	_, err := lb.IncLoad("www.not-existing.de")
+	if err == nil {
+		t.Fatal("increasing load on not existing host should return error")
+	}
 
 	lb.Done("www.not-existing.de", time.Now())
 }
