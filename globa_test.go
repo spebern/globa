@@ -209,9 +209,9 @@ func request(lb LoadBalancer, done chan bool) {
 
 func TestRace(t *testing.T) {
 	done := make(chan bool)
-	lb := NewLoadBalancer([]string{googleURL, bingURL, baiduURL}, 4, 60*time.Millisecond, 0.2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{googleURL, bingURL, baiduURL}, 4, 40*time.Millisecond, 0.2).(*loadBalancer)
 
-	var requestCount = 800
+	var requestCount = 600
 	for i := 0; i < requestCount; i++ {
 		go request(lb, done)
 	}
@@ -227,16 +227,19 @@ func TestRace(t *testing.T) {
 	for URL, host := range lb.hosts {
 		switch URL {
 		case googleURL:
-			if host.avgResponseTime < 0.5 || host.avgResponseTime > 1.5 {
-				t.Fatal("avg response time of google should be between 0.5 and 1.5")
+			if host.avgResponseTime < 0.5 || host.avgResponseTime > 2.5 {
+				t.Fatal("avg response time of google should be between 0.5 and 1.5, but is:",
+					host.avgResponseTime)
 			}
 		case bingURL:
-			if host.avgResponseTime < 1.5 || host.avgResponseTime > 2.5 {
-				t.Fatal("avg response time of bing should be between 1.5 and 2.5")
+			if host.avgResponseTime < 1.0 || host.avgResponseTime > 3.0 {
+				t.Fatal("avg response time of bing should be between 1.5 and 2.5, but is:",
+					host.avgResponseTime)
 			}
 		case baiduURL:
-			if host.avgResponseTime < 3.5 || host.avgResponseTime > 4.5 {
-				t.Fatal("avg response time of baidu should be between 1.5 and 2.5")
+			if host.avgResponseTime < 3.0 || host.avgResponseTime > 5.0 {
+				t.Fatal("avg response time of baidu should be between 1.5 and 2.5, but is:",
+					host.avgResponseTime)
 			}
 		}
 	}
