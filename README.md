@@ -32,8 +32,8 @@ func main() {
 		// do your request here
 		lb.Done(u, startTime)
 	} else {
-        lb.Recover()
-    }
+		lb.Recover()
+	}
 
 	u, err = lb.GetLeastBusyURL()
 
