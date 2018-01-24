@@ -19,26 +19,30 @@ func main() {
 	maxConcurrentRequests := 3
 	timeout := 5 * time.Second
 
-	lb := globa.NewLoadBalancer(URLs, maxConcurrentRequests, timeout)
+	// impact of new response times on average response time
+	// avgResponseTime = alpha * newResponseTime + (1.0 - alpha) * avgResponseTime
+	alpha := 0.2
+
+	lb := globa.NewLoadBalancer(URLs, maxConcurrentRequests, timeout, alpha)
 
 	u, err := lb.GetLeastBusyURL()
 	if err == nil {
-		timeoutErr := lb.IncLoad(u)
+		startTime, timeoutErr := lb.IncLoad(u)
 
 		// do your request here
-		lb.Done(u)
+		lb.Done(u, startTime)
 	}
 
 	u, err = lb.GetLeastBusyURL()
 
 	if err == nil {
-		timeoutErr := lb.IncLoad(u)
+		startTime, timeoutErr := lb.IncLoad(u)
 
 		// do your request here
 		// ups failed!
 
 		// done also has to be called after failing!
-		lb.Done(u)
+		lb.Done(u, startTime)
 
 		// remove this url since it seems broken
 		lb.Remove(u)

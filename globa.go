@@ -13,10 +13,32 @@ import (
 var ErrTimeout = errors.New("timeout")
 
 type host struct {
-	load int64
-
 	*sync.Mutex
-	token chan struct{}
+	avgResponseTime float64
+	pendingRequests int64
+	token           chan struct{}
+}
+
+func newHost(concurrentRequests int) *host {
+	h := &host{
+		Mutex: &sync.Mutex{},
+		token: make(chan struct{}, concurrentRequests)}
+
+	for i := 0; i < concurrentRequests; i++ {
+		h.token <- struct{}{}
+	}
+
+	return h
+}
+
+func (h *host) load() float64 {
+	h.Lock()
+	defer h.Unlock()
+
+	// pendingRequests + 1 because otherwise it can be 0
+	// however the host with least avgResponsetime should still be
+	// prefered
+	return h.avgResponseTime * float64(h.pendingRequests+1)
 }
 
 // LoadBalancer is used to balance the load between different URLs.
@@ -25,8 +47,8 @@ type LoadBalancer interface {
 	Remove(string)
 	RemovePermanent(string)
 	Recover()
-	IncLoad(string) error
-	Done(string)
+	IncLoad(string) (time.Time, error)
+	Done(string, time.Time)
 	GetLeastBusyURL() (string, error)
 }
 
@@ -34,28 +56,30 @@ type loadBalancer struct {
 	hostsMu            sync.RWMutex
 	hosts              map[string]*host
 	allHosts           map[string]*host
-	totalLoad          int64
+	totalRequests      int64
+	alpha              float64
 	concurrentRequests int
 	hostFailed         bool
 	timeout            time.Duration
 }
 
 // NewLoadBalancer returns a new LoadBalancer.
-func NewLoadBalancer(URLs []string, concurrentRequests int, timeout time.Duration) LoadBalancer {
+func NewLoadBalancer(URLs []string, concurrentRequests int, timeout time.Duration, alpha float64) LoadBalancer {
+	if alpha < 0.0 || alpha > 1.0 {
+		panic("alpha must be between 0 and 1.0")
+	}
+
 	lb := &loadBalancer{
 		hosts:              make(map[string]*host),
 		allHosts:           make(map[string]*host),
 		concurrentRequests: concurrentRequests,
-		timeout:            timeout}
+		timeout:            timeout,
+		alpha:              alpha}
 
 	for _, URL := range URLs {
-		h := host{0, &sync.Mutex{}, make(chan struct{}, concurrentRequests)}
-		for i := 0; i < concurrentRequests; i++ {
-			h.token <- struct{}{}
-		}
-
-		lb.hosts[URL] = &h
-		lb.allHosts[URL] = &h
+		h := newHost(concurrentRequests)
+		lb.hosts[URL] = h
+		lb.allHosts[URL] = h
 	}
 
 	return lb
@@ -70,11 +94,8 @@ func (lb *loadBalancer) Add(URL string) {
 		return
 	}
 
+	h := newHost(lb.concurrentRequests)
 
-	h := &host{0, &sync.Mutex{}, make(chan struct{}, lb.concurrentRequests)}
-	for i := 0; i < lb.concurrentRequests; i++ {
-		h.token <- struct{}{}
-	}
 	lb.hosts[URL] = h
 	lb.allHosts[URL] = h
 }
@@ -111,7 +132,7 @@ func (lb *loadBalancer) Recover() {
 
 // Increase the load on a host. Can be called before sending a request. Done has
 // to be called with the same URL afterwards.
-func (lb *loadBalancer) IncLoad(URL string) error {
+func (lb *loadBalancer) IncLoad(URL string) (time.Time, error) {
 	lb.hostsMu.RLock()
 	defer lb.hostsMu.RUnlock()
 
@@ -123,11 +144,13 @@ func (lb *loadBalancer) IncLoad(URL string) error {
 	for {
 		select {
 		case <-h.token:
-			atomic.AddInt64(&h.load, 1)
-			atomic.AddInt64(&lb.totalLoad, 1)
-			return nil
+			h.Lock()
+			defer h.Unlock()
+			h.pendingRequests++
+			atomic.AddInt64(&lb.totalRequests, 1)
+			return time.Now(), nil
 		case <-time.After(lb.timeout):
-			return ErrTimeout
+			return time.Now(), ErrTimeout
 		}
 
 	}
@@ -135,7 +158,7 @@ func (lb *loadBalancer) IncLoad(URL string) error {
 
 // Tell the load balancer request on the URL finished. Should only be called
 // after an increasing the load.
-func (lb *loadBalancer) Done(URL string) {
+func (lb *loadBalancer) Done(URL string, startTime time.Time) {
 	lb.hostsMu.RLock()
 	defer lb.hostsMu.RUnlock()
 
@@ -144,11 +167,15 @@ func (lb *loadBalancer) Done(URL string) {
 		panic("called done for of non existing host")
 	}
 
-	atomic.AddInt64(&h.load, -1)
-	atomic.AddInt64(&lb.totalLoad, -1)
-
 	h.Lock()
 	defer h.Unlock()
+
+	h.pendingRequests--
+	atomic.AddInt64(&lb.totalRequests, -1)
+
+	responseTime := time.Since(startTime)
+	h.avgResponseTime = lb.alpha*float64(responseTime/time.Millisecond) + (1.0-lb.alpha)*h.avgResponseTime
+
 	if len(h.token) < lb.concurrentRequests {
 		h.token <- struct{}{}
 	}
@@ -160,12 +187,12 @@ func (lb *loadBalancer) GetLeastBusyURL() (string, error) {
 	lb.hostsMu.RLock()
 	defer lb.hostsMu.RUnlock()
 
-	var minLoad int64 = math.MaxInt64
+	minLoad := math.MaxFloat64
 	var bestURL string
 	for URL, h := range lb.hosts {
-		load := atomic.LoadInt64(&h.load)
+		load := h.load()
 
-		if load == 0 {
+		if load == 0.0 {
 			return URL, nil
 		}
 

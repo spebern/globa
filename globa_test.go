@@ -2,12 +2,17 @@ package globa
 
 import (
 	"log"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
+var googleURL = string("www.google.com")
+var baiduURL = string("www.baidu.com")
+var bingURL = string("www.bing.com")
+
 func TestAdd(t *testing.T) {
-	lb := NewLoadBalancer([]string{}, 2, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{}, 2, time.Second, 0.2).(*loadBalancer)
 	if len(lb.hosts) != 0 {
 		t.Fatal("initial length of hosts should be 0")
 	}
@@ -18,12 +23,13 @@ func TestAdd(t *testing.T) {
 	URL := "www.google.de"
 	lb.Add(URL)
 	lb.Add(URL)
+
 	host, ok := lb.hosts[URL]
 	if !ok {
 		t.Fatal("URL should be mapped to a host")
 	}
-	if host.load != 0 {
-		t.Fatal("hosts initial load should be 0")
+	if host.pendingRequests != 0 {
+		t.Fatal("hosts initial pendingRequests should be 0")
 	}
 
 	hostInAllHosts, ok := lb.allHosts[URL]
@@ -37,7 +43,7 @@ func TestAdd(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	URL := "www.google.de"
-	lb := NewLoadBalancer([]string{URL}, 0, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL}, 0, time.Second, 0.2).(*loadBalancer)
 
 	lb.Remove(URL)
 	lb.Remove(URL)
@@ -53,7 +59,7 @@ func TestRemove(t *testing.T) {
 
 func TestRemovePermanent(t *testing.T) {
 	URL := "www.google.de"
-	lb := NewLoadBalancer([]string{URL}, 2, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL}, 2, time.Second, 0.2).(*loadBalancer)
 
 	lb.RemovePermanent(URL)
 	lb.RemovePermanent(URL)
@@ -70,7 +76,7 @@ func TestRecover(t *testing.T) {
 	URL1 := "www.google.de"
 	URL2 := "www.baidu.com"
 	URL3 := "www.bing.de"
-	lb := NewLoadBalancer([]string{URL1, URL2, URL3}, 2, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL1, URL2, URL3}, 2, time.Second, 0.2).(*loadBalancer)
 	lb.Remove(URL1)
 	lb.RemovePermanent(URL2)
 
@@ -87,24 +93,24 @@ func TestRecover(t *testing.T) {
 
 func TestIncLoadAndDone(t *testing.T) {
 	URL := "www.google.de"
-	lb := NewLoadBalancer([]string{URL}, 2, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL}, 2, time.Second, 0.2).(*loadBalancer)
 
-	lb.IncLoad(URL)
-	lb.IncLoad(URL)
+	startTime1, _ := lb.IncLoad(URL)
+	startTime2, _ := lb.IncLoad(URL)
 
-	if lb.hosts[URL].load != 2 {
+	if lb.hosts[URL].pendingRequests != 2 {
 		t.Fatal("host should have a load of 2")
 	}
 
-	lb.Done(URL)
+	lb.Done(URL, startTime1)
 
-	if lb.hosts[URL].load != 1 {
+	if lb.hosts[URL].pendingRequests != 1 {
 		t.Fatal("host should have a load of 1")
 	}
 
-	lb.Done(URL)
+	lb.Done(URL, startTime2)
 
-	if lb.hosts[URL].load != 0 {
+	if lb.hosts[URL].pendingRequests != 0 {
 		t.Fatal("host should have a load of 0")
 	}
 
@@ -118,7 +124,7 @@ func TestIncLoadAndDone(t *testing.T) {
 }
 
 func TestDonePanic(t *testing.T) {
-	lb := NewLoadBalancer([]string{}, 2, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{}, 2, time.Second, 0.2).(*loadBalancer)
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -126,18 +132,21 @@ func TestDonePanic(t *testing.T) {
 		}
 	}()
 
-	lb.Done("www.not-existing.de")
+	lb.Done("www.not-existing.de", time.Now())
 }
 
 func TestGetLeastBusyHost(t *testing.T) {
 	URL1 := "www.google.de"
 	URL2 := "www.baidu.com"
 
-	lb := NewLoadBalancer([]string{URL1, URL2}, 2, time.Second).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL1, URL2}, 2, time.Second, 0.2).(*loadBalancer)
 
-	lb.IncLoad(URL1)
+	startTime, _ := lb.IncLoad(URL1)
+	time.Sleep(time.Second)
+	lb.Done(URL1, startTime)
 
 	bestURL, err := lb.GetLeastBusyURL()
+
 	if err != nil {
 		t.Fatal("no error should have occurred")
 	}
@@ -155,7 +164,7 @@ func TestGetLeastBusyHost(t *testing.T) {
 		t.Fatal("did not get best URL")
 	}
 
-	lb.Done(URL1)
+	lb.Done(URL1, startTime)
 
 	lb.Remove(URL1)
 
@@ -168,6 +177,8 @@ func TestGetLeastBusyHost(t *testing.T) {
 	}
 }
 
+var timeouts = int64(0)
+
 func request(lb LoadBalancer, done chan bool) {
 	URL, err := lb.GetLeastBusyURL()
 
@@ -175,21 +186,32 @@ func request(lb LoadBalancer, done chan bool) {
 		log.Fatal("should have gotten least busy url")
 	}
 
-	lb.IncLoad(URL)
+	startTime, timeout := lb.IncLoad(URL)
+
+	if timeout != nil {
+		atomic.AddInt64(&timeouts, 1)
+	}
 
 	defer func() {
-		lb.Done(URL)
+		lb.Done(URL, startTime)
 		done <- true
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	switch URL {
+	case googleURL:
+		time.Sleep(1 * time.Millisecond)
+	case bingURL:
+		time.Sleep(2 * time.Millisecond)
+	case baiduURL:
+		time.Sleep(4 * time.Millisecond)
+	}
 }
 
 func TestRace(t *testing.T) {
 	done := make(chan bool)
-	lb := NewLoadBalancer([]string{"www.google.de", "www.baidu.de", "www.bing.de"}, 2, 100*time.Millisecond)
+	lb := NewLoadBalancer([]string{googleURL, bingURL, baiduURL}, 4, 60*time.Millisecond, 0.2).(*loadBalancer)
 
-	var requestCount = 40
+	var requestCount = 800
 	for i := 0; i < requestCount; i++ {
 		go request(lb, done)
 	}
@@ -200,5 +222,26 @@ func TestRace(t *testing.T) {
 		if i == requestCount {
 			break
 		}
+	}
+
+	for URL, host := range lb.hosts {
+		switch URL {
+		case googleURL:
+			if host.avgResponseTime < 0.5 || host.avgResponseTime > 1.5 {
+				t.Fatal("avg response time of google should be between 0.5 and 1.5")
+			}
+		case bingURL:
+			if host.avgResponseTime < 1.5 || host.avgResponseTime > 2.5 {
+				t.Fatal("avg response time of bing should be between 1.5 and 2.5")
+			}
+		case baiduURL:
+			if host.avgResponseTime < 3.5 || host.avgResponseTime > 4.5 {
+				t.Fatal("avg response time of baidu should be between 1.5 and 2.5")
+			}
+		}
+	}
+
+	if timeouts > 20 {
+		t.Fatal("there shouldn't be more than 20 timeouts")
 	}
 }
