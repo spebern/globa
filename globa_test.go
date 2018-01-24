@@ -1,12 +1,13 @@
 package globa
 
 import (
+	"log"
 	"testing"
 	"time"
 )
 
 func TestAdd(t *testing.T) {
-	lb := NewLoadBalancer([]string{}, 2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{}, 2, time.Second).(*loadBalancer)
 	if len(lb.hosts) != 0 {
 		t.Fatal("initial length of hosts should be 0")
 	}
@@ -36,7 +37,7 @@ func TestAdd(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	URL := "www.google.de"
-	lb := NewLoadBalancer([]string{URL}, 0).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL}, 0, time.Second).(*loadBalancer)
 
 	lb.Remove(URL)
 	lb.Remove(URL)
@@ -52,7 +53,7 @@ func TestRemove(t *testing.T) {
 
 func TestRemovePermanent(t *testing.T) {
 	URL := "www.google.de"
-	lb := NewLoadBalancer([]string{URL}, 2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL}, 2, time.Second).(*loadBalancer)
 
 	lb.RemovePermanent(URL)
 	lb.RemovePermanent(URL)
@@ -69,7 +70,7 @@ func TestRecover(t *testing.T) {
 	URL1 := "www.google.de"
 	URL2 := "www.baidu.com"
 	URL3 := "www.bing.de"
-	lb := NewLoadBalancer([]string{URL1, URL2, URL3}, 2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL1, URL2, URL3}, 2, time.Second).(*loadBalancer)
 	lb.Remove(URL1)
 	lb.RemovePermanent(URL2)
 
@@ -86,7 +87,7 @@ func TestRecover(t *testing.T) {
 
 func TestIncLoadAndDone(t *testing.T) {
 	URL := "www.google.de"
-	lb := NewLoadBalancer([]string{URL}, 2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL}, 2, time.Second).(*loadBalancer)
 
 	lb.IncLoad(URL)
 	lb.IncLoad(URL)
@@ -117,7 +118,7 @@ func TestIncLoadAndDone(t *testing.T) {
 }
 
 func TestDonePanic(t *testing.T) {
-	lb := NewLoadBalancer([]string{}, 2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{}, 2, time.Second).(*loadBalancer)
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -132,7 +133,7 @@ func TestGetLeastBusyHost(t *testing.T) {
 	URL1 := "www.google.de"
 	URL2 := "www.baidu.com"
 
-	lb := NewLoadBalancer([]string{URL1, URL2}, 2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{URL1, URL2}, 2, time.Second).(*loadBalancer)
 
 	lb.IncLoad(URL1)
 
@@ -170,24 +171,25 @@ func TestGetLeastBusyHost(t *testing.T) {
 func request(lb LoadBalancer, done chan bool) {
 	URL, err := lb.GetLeastBusyURL()
 
+	if err != nil {
+		log.Fatal("should have gotten least busy url")
+	}
+
 	lb.IncLoad(URL)
+
 	defer func() {
 		lb.Done(URL)
 		done <- true
 	}()
 
-	if err != nil {
-		lb.Recover()
-	}
-
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestRace(t *testing.T) {
 	done := make(chan bool)
-	lb := NewLoadBalancer([]string{"www.google.de", "www.baidu.de", "www.bing.de"}, 3)
+	lb := NewLoadBalancer([]string{"www.google.de", "www.baidu.de", "www.bing.de"}, 2, 100*time.Millisecond)
 
-	var requestCount = 100
+	var requestCount = 40
 	for i := 0; i < requestCount; i++ {
 		go request(lb, done)
 	}

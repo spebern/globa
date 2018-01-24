@@ -8,27 +8,31 @@ There is also an option for setting the maximum number of concurrent requests on
 ``` go
 package main
 
-import "github.com/spebern/globa"
+import (
+	"time"
+
+	"github.com/spebern/globa"
+)
 
 func main() {
 	URLs := []string{"www.google.de", "www.bing.de"}
 	maxConcurrentRequests := 3
+	timeout := 5 * time.Second
 
-	lb := globa.NewLoadBalancer(URLs, maxConcurrentRequests)
+	lb := globa.NewLoadBalancer(URLs, maxConcurrentRequests, timeout)
 
 	u, err := lb.GetLeastBusyURL()
 	if err == nil {
-		lb.IncLoad(u)
+		timeoutErr := lb.IncLoad(u)
 
 		// do your request here
-
 		lb.Done(u)
 	}
 
 	u, err = lb.GetLeastBusyURL()
 
 	if err == nil {
-		lb.IncLoad(u)
+		timeoutErr := lb.IncLoad(u)
 
 		// do your request here
 		// ups failed!

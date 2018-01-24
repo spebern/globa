@@ -5,11 +5,18 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
+// ErrTimeout will be returned if host blocks longer than the timeout
+// set in the load balancer.
+var ErrTimeout = errors.New("timeout")
+
 type host struct {
-	load    int64
-	pending chan struct{}
+	load int64
+
+	*sync.Mutex
+	token chan struct{}
 }
 
 // LoadBalancer is used to balance the load between different URLs.
@@ -18,33 +25,35 @@ type LoadBalancer interface {
 	Remove(string)
 	RemovePermanent(string)
 	Recover()
-	IncLoad(string)
+	IncLoad(string) error
 	Done(string)
 	GetLeastBusyURL() (string, error)
 }
 
 type loadBalancer struct {
-	hostsMu          sync.RWMutex
-	hosts            map[string]*host
-	allHosts         map[string]*host
-	totalLoad        int64
-	maxConcurrentReq int
-	hostFailed       bool
+	hostsMu            sync.RWMutex
+	hosts              map[string]*host
+	allHosts           map[string]*host
+	totalLoad          int64
+	concurrentRequests int
+	hostFailed         bool
+	timeout            time.Duration
 }
 
 // NewLoadBalancer returns a new LoadBalancer.
-func NewLoadBalancer(URLs []string, maxConcurrentReq int) LoadBalancer {
+func NewLoadBalancer(URLs []string, concurrentRequests int, timeout time.Duration) LoadBalancer {
 	lb := &loadBalancer{
-		hosts:    make(map[string]*host),
-		allHosts: make(map[string]*host)}
+		hosts:              make(map[string]*host),
+		allHosts:           make(map[string]*host),
+		concurrentRequests: concurrentRequests,
+		timeout:            timeout}
 
 	for _, URL := range URLs {
-		var h host
-		if maxConcurrentReq == 0 {
-			h = host{0, make(chan struct{})}
-		} else {
-			h = host{0, make(chan struct{}, maxConcurrentReq)}
+		h := host{0, &sync.Mutex{}, make(chan struct{}, concurrentRequests)}
+		for i := 0; i < concurrentRequests; i++ {
+			h.token <- struct{}{}
 		}
+
 		lb.hosts[URL] = &h
 		lb.allHosts[URL] = &h
 	}
@@ -61,7 +70,10 @@ func (lb *loadBalancer) Add(URL string) {
 	lb.hostsMu.Lock()
 	defer lb.hostsMu.Unlock()
 
-	h := &host{0, make(chan struct{}, lb.maxConcurrentReq)}
+	h := &host{0, &sync.Mutex{}, make(chan struct{}, lb.concurrentRequests)}
+	for i := 0; i < lb.concurrentRequests; i++ {
+		h.token <- struct{}{}
+	}
 	lb.hosts[URL] = h
 	lb.allHosts[URL] = h
 }
@@ -98,7 +110,7 @@ func (lb *loadBalancer) Recover() {
 
 // Increase the load on a host. Can be called before sending a request. Done has
 // to be called with the same URL afterwards.
-func (lb *loadBalancer) IncLoad(URL string) {
+func (lb *loadBalancer) IncLoad(URL string) error {
 	lb.hostsMu.RLock()
 	defer lb.hostsMu.RUnlock()
 
@@ -107,9 +119,17 @@ func (lb *loadBalancer) IncLoad(URL string) {
 		panic("increased load of non existing host")
 	}
 
-	atomic.AddInt64(&h.load, 1)
-	atomic.AddInt64(&lb.totalLoad, 1)
-	h.pending <- struct{}{}
+	for {
+		select {
+		case <-h.token:
+			atomic.AddInt64(&h.load, 1)
+			atomic.AddInt64(&lb.totalLoad, 1)
+			return nil
+		case <-time.After(lb.timeout):
+			return ErrTimeout
+		}
+
+	}
 }
 
 // Tell the load balancer request on the URL finished. Should only be called
@@ -126,7 +146,11 @@ func (lb *loadBalancer) Done(URL string) {
 	atomic.AddInt64(&h.load, -1)
 	atomic.AddInt64(&lb.totalLoad, -1)
 
-	<-h.pending
+	h.Lock()
+	defer h.Unlock()
+	if len(h.token) < lb.concurrentRequests {
+		h.token <- struct{}{}
+	}
 }
 
 // Get the URL with the least load.
