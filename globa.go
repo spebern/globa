@@ -12,6 +12,10 @@ import (
 // set in the load balancer.
 var ErrTimeout = errors.New("timeout")
 
+// ErrNoRemainingHosts will be returned if there are no more remaining hosts.
+// Old removed hosts can be restored with the "Recover" method.
+var ErrNoRemainingHosts = errors.New("no remaining hosts")
+
 type host struct {
 	*sync.Mutex
 	avgResponseTime float64
@@ -203,7 +207,7 @@ func (lb *loadBalancer) GetLeastBusyURL() (string, error) {
 	}
 
 	if bestURL == "" {
-		return "", errors.New("no remaining hosts")
+		return "", ErrNoRemainingHosts
 	}
 
 	return bestURL, nil

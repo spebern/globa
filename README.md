@@ -25,13 +25,15 @@ func main() {
 
 	lb := globa.NewLoadBalancer(URLs, maxConcurrentRequests, timeout, alpha)
 
-	u, err := lb.GetLeastBusyURL()
-	if err == nil {
+	u, errNoremainingHosts := lb.GetLeastBusyURL()
+	if errNoRemainingHosts == nil {
 		startTime, timeoutErr := lb.IncLoad(u)
 
 		// do your request here
 		lb.Done(u, startTime)
-	}
+	} else {
+        lb.Recover()
+    }
 
 	u, err = lb.GetLeastBusyURL()
 
