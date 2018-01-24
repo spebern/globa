@@ -209,7 +209,7 @@ func request(lb LoadBalancer, done chan bool) {
 
 func TestRace(t *testing.T) {
 	done := make(chan bool)
-	lb := NewLoadBalancer([]string{googleURL, bingURL, baiduURL}, 4, 40*time.Millisecond, 0.2).(*loadBalancer)
+	lb := NewLoadBalancer([]string{googleURL, bingURL, baiduURL}, 4, 100*time.Millisecond, 0.2).(*loadBalancer)
 
 	var requestCount = 600
 	for i := 0; i < requestCount; i++ {
