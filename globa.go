@@ -63,12 +63,13 @@ func NewLoadBalancer(URLs []string, concurrentRequests int, timeout time.Duratio
 
 // Add URL as a new host.
 func (lb *loadBalancer) Add(URL string) {
+	lb.hostsMu.Lock()
+	defer lb.hostsMu.Unlock()
+
 	if _, ok := lb.hosts[URL]; ok {
 		return
 	}
 
-	lb.hostsMu.Lock()
-	defer lb.hostsMu.Unlock()
 
 	h := &host{0, &sync.Mutex{}, make(chan struct{}, lb.concurrentRequests)}
 	for i := 0; i < lb.concurrentRequests; i++ {
