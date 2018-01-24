@@ -245,6 +245,6 @@ func TestRace(t *testing.T) {
 	}
 
 	if timeouts > 20 {
-		t.Fatal("there shouldn't be more than 20 timeouts")
+		t.Fatal("there shouldn't be more than 20 timeouts, but there were:", timeouts)
 	}
 }
