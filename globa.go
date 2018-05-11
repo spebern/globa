@@ -41,12 +41,12 @@ func newHost(concurrentRequests int) *host {
 
 func (h *host) load() float64 {
 	h.Lock()
-	defer h.Unlock()
-
 	// pendingRequests + 1 because otherwise it can be 0
 	// however the host with least avgResponsetime should still be
 	// prefered
-	return h.avgResponseTime * float64(h.pendingRequests+1)
+	load := h.avgResponseTime * float64(h.pendingRequests+1)
+	h.Unlock()
+	return load
 }
 
 // LoadBalancer is used to balance the load between different URLs.
@@ -111,17 +111,17 @@ func (lb *loadBalancer) Add(URL string) {
 // Remove a host based on its URL.
 func (lb *loadBalancer) Remove(URL string) {
 	lb.hostsMu.Lock()
-	defer lb.hostsMu.Unlock()
 	lb.hostFailed = true
 	delete(lb.hosts, URL)
+	lb.hostsMu.Unlock()
 }
 
 // Remove a host based on its URL. This host cannot be restored by the "Recover" method.
 func (lb *loadBalancer) RemovePermanent(URL string) {
 	lb.hostsMu.Lock()
-	defer lb.hostsMu.Unlock()
 	delete(lb.hosts, URL)
 	delete(lb.allHosts, URL)
+	lb.hostsMu.Unlock()
 }
 
 // Recover removed hosts.
@@ -129,13 +129,13 @@ func (lb *loadBalancer) Recover() {
 	if !lb.hostFailed {
 		return
 	}
-	lb.hostsMu.Lock()
-	defer lb.hostsMu.Unlock()
 
 	lb.hostFailed = false
+	lb.hostsMu.Lock()
 	for URL := range lb.allHosts {
-		lb.hosts[URL] = lb.allHosts[URL]
+		lb.hosts[URL] = newHost(lb.concurrentRequests)
 	}
+	lb.hostsMu.Unlock()
 }
 
 // Increase the load on a host. Can be called before sending a request. Done has
@@ -153,8 +153,8 @@ func (lb *loadBalancer) IncLoad(URL string) (time.Time, error) {
 		select {
 		case <-h.token:
 			h.Lock()
-			defer h.Unlock()
 			h.pendingRequests++
+			h.Unlock()
 			atomic.AddInt64(&lb.totalRequests, 1)
 			return time.Now(), nil
 		case <-time.After(lb.timeout):
@@ -176,8 +176,6 @@ func (lb *loadBalancer) Done(URL string, startTime time.Time) {
 	}
 
 	h.Lock()
-	defer h.Unlock()
-
 	h.pendingRequests--
 	atomic.AddInt64(&lb.totalRequests, -1)
 
@@ -187,6 +185,7 @@ func (lb *loadBalancer) Done(URL string, startTime time.Time) {
 	if len(h.token) < lb.concurrentRequests {
 		h.token <- struct{}{}
 	}
+	h.Unlock()
 }
 
 // Get the URL with the least load.
